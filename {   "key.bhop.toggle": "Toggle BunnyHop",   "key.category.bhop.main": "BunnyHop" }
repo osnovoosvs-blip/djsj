@@ -1,0 +1,86 @@
+package com.example.bhop;
+
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
+import org.lwjgl.glfw.GLFW;
+
+public class BhopClient implements ClientModInitializer {
+    private static final double ACCEL_PER_DEGREE = 0.004;
+    private static final float MAX_DELTA = 45f;
+
+    private static KeyBinding toggleKey;
+    private static boolean enabled = false;
+    private static boolean forced = false;
+    private static float lastYaw = 0f;
+
+    @Override
+    public void onInitializeClient() {
+        KeyBinding.Category category = KeyBinding.Category.create(Identifier.of("bhop", "main"));
+        toggleKey = KeyBindingHelper.registerKeyBinding(
+            new KeyBinding("key.bhop.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_B, category));
+
+        ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+            while (toggleKey.wasPressed()) {
+                enabled = !enabled;
+                if (mc.player != null) {
+                    mc.player.sendMessage(Text.literal("BunnyHop: " + (enabled ? "ON" : "OFF")), true);
+                }
+            }
+            tick(mc);
+        });
+    }
+
+    private static void tick(MinecraftClient mc) {
+        ClientPlayerEntity p = mc.player;
+        if (p == null) return;
+
+        boolean fwdKey = p.input.playerInput.forward();
+        boolean backKey = p.input.playerInput.backward();
+        boolean leftKey = p.input.playerInput.left();
+        boolean rightKey = p.input.playerInput.right();
+        boolean moving = fwdKey || backKey || leftKey || rightKey;
+
+        float yaw = p.getYaw();
+        float delta = Math.abs(MathHelper.wrapDegrees(yaw - lastYaw));
+        lastYaw = yaw;
+
+        boolean shouldJump = enabled && moving && p.isOnGround()
+                && !p.isSneaking() && !p.isTouchingWater() && !p.isClimbing()
+                && mc.currentScreen == null;
+        if (shouldJump) {
+            mc.options.jumpKey.setPressed(true);
+            forced = true;
+        } else if (forced) {
+            mc.options.jumpKey.setPressed(false);
+            forced = false;
+        }
+
+        if (enabled && moving && !p.isOnGround() && !p.isTouchingWater()
+                && !p.isClimbing() && !p.isGliding() && delta > 0.01f) {
+
+            double fwd = (fwdKey ? 1 : 0) - (backKey ? 1 : 0);
+            double side = (leftKey ? 1 : 0) - (rightKey ? 1 : 0);
+            double rad = Math.toRadians(yaw);
+
+            double wx = -Math.sin(rad) * fwd + Math.cos(rad) * side;
+            double wz =  Math.cos(rad) * fwd + Math.sin(rad) * side;
+            double len = Math.sqrt(wx * wx + wz * wz);
+            if (len > 1.0E-4) {
+                wx /= len;
+                wz /= len;
+                double boost = ACCEL_PER_DEGREE * Math.min(delta, MAX_DELTA);
+                Vec3d v = p.getVelocity();
+                p.setVelocity(v.x + wx * boost, v.y, v.z + wz * boost);
+            }
+        }
+    }
+}
